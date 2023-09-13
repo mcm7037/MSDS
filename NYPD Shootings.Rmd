@@ -1,0 +1,215 @@
+---
+title: "NYPD Shootings"
+author: "MC"
+date: "2023-06-07"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+# NYPD Shooting Incident Report
+
+As a first introduction to a Data Science project, we are asked to provide some data visualization, analysis, and modelling of data from the city of New York.  
+This specific database gathers data on shooting incidents in the city between 2006 and 2022: the date and time of the incident, its location, and various information about the perpetrator and the victim.  
+  
+We haven't been given a specific question to answer so I have decided to mostly focus on data around the race of the victims: has the number of Asian victims gone up since Covid, and can we somehow predict the proportion of each race among the victims over the years?
+
+
+## Import the Data
+
+The link address for the data is: https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD  
+The code below shows how to retrieve the data and gives a preview.
+
+
+```{r get_data}
+nypd_shooting <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+nypd_shooting
+summary(nypd_shooting)
+```
+  
+  
+## Tidy the Data
+
+I have chosen to remove all coordinates info as well as latitude and longitude. I would have kept them if I had planned to plot the data against a map of the city. I'm also removing most of the codes and classification of which I don't know the meaning, and those I don't need for my analysis. In the end, I'm only keeping the date of occurrence, the precinct, and the victim's race.  
+I'm changing the dates from chr to date type so I can use them in my analysis.  
+Finally I'm changing the victim's race type from character to factor (categorical) data.  
+  
+```{r tidy_data}
+# Apply the date type and select the desired variables
+nypd_shooting_short <- nypd_shooting %>%  
+  select(c(OCCUR_DATE, PRECINCT, VIC_RACE)) %>% 
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+# Apply the factor type to some of the data
+nypd_shooting_short$VIC_RACE <- as.factor(nypd_shooting_short$VIC_RACE)
+
+nypd_shooting_short
+```
+  
+  
+## Visualize the Data
+
+The data goes from `r min(nypd_shooting$OCCUR_DATE)` to `r max(nypd_shooting$OCCUR_DATE)`. Let's look at the number of incidents per year.  
+We can also look at the number of incidents per precinct to identify locations more prone to violence. The precinct numbers go from `r min(nypd_shooting$PRECINCT)` to `r max(nypd_shooting$PRECINCT)`.  
+Finally we can look at the number of incidents with regards to the victim's race.  
+  
+```{r visualize}
+# Incidents per precinct
+nypd_shooting_short %>% ggplot(aes(PRECINCT)) +
+  geom_histogram() +
+  labs(title = "Shooting Incidents per Precinct between 2006 and 2022")
+
+# I want to pull the year of each incident out from the date column and into a separate variable
+nypd_shooting_short <- nypd_shooting_short %>%
+  mutate(Year = year(OCCUR_DATE)) %>% 
+  relocate(Year)
+nypd_shooting_short
+
+# Number of incidents per year
+nypd_by_year <- nypd_shooting_short %>% group_by(Year) %>% 
+  summarise(total_count = n())
+nypd_by_year
+nypd_by_year %>% ggplot(aes(x = Year, y = total_count)) +
+  geom_point() + geom_line() +
+  labs(title = "Shooting Incidents per Year", x = "Year of Occurrence")
+
+# Number of incidents per race of the victim
+nypd_shooting_short %>% ungroup() %>% 
+  ggplot(aes(VIC_RACE)) + 
+  geom_bar() +
+  labs(title = "Shooting Incidents per Race of the Victim between 2006 and 2022") +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+We can see that the number of shooting incidents was in steady decline from 2006 until 2019, then started increasing sharply.  
+  
+The histogram counting the number of incidents per precinct shows which areas of the city are subjected to the most shootings with precinct 40 having the most incidents.
+  
+The histogram counting the number of incidents depending on the race of the victim shows that Black people are most likely to be the victim of a shooting by far.  
+
+
+
+## Analyze the Data
+
+So many questions...
+Why didn't the number of incidents go down during lockdown? Has it gone up since the BLM movement because (1) there were more incidents or (2) there were more reports? Has Covid had an impact on the number of Asian victims? Did the number of female victims go up during lockdown because of domestic violence? Why is there no data concerning LGBTQ+ people? ...  
+To keep it easy and straightforward with the data I have, I will look at the number of Asian victims through the years.  
+  
+```{r analyze}
+# Filter the data of interest
+nypd_asian_vics <- nypd_shooting_short %>% group_by(Year) %>% 
+  filter(VIC_RACE == "ASIAN / PACIFIC ISLANDER") %>% 
+  summarise(as_count = n())
+
+# Plot the data
+nypd_asian_vics %>% ggplot(aes(x = Year, y = as_count)) +
+  geom_point() + geom_line() +
+  labs(title = "Shooting Incidents Involving Asian Victims per Year", x = "Year of Occurrence")
+
+```
+
+There definitely looks to be an increase in shootings involving Asian people since Covid. Is it a fluke? Is it linked to other aspects we haven't considered yet? Or is it purely a result of calling the virus the "China virus"?  
+  
+This is where my bias comes into play: I was certain I was going to see an increase and I'm already blaming it on the words of a certain president. To mitigate my bias, I would have to show with more data and more analysis that there are no other factors involved in the increase (for example a sharp increase in Asian population, the random arrival of some gangs...).
+
+
+## Model the Data
+
+Let's see if we can model the proportion of incidents by race of the victim on a yearly basis.
+The first plot below may lead us to think that the proportions are linear. The second group of plots and the models will try to confirm or refute that.
+
+```{r model}
+# I can add a count of the number of incidents per year and per race of the victim
+nypd_by_race <- nypd_shooting_short %>% group_by(Year, VIC_RACE) %>% 
+  summarise(count = n())
+nypd_by_race
+
+# Join the tables to add the total count per year
+nypd_prop <- nypd_by_race %>% left_join(nypd_by_year, by = "Year") %>% 
+  # Calculate the proportions per year
+  mutate(prop = count / total_count)
+nypd_prop
+
+# Plots
+nypd_prop %>% ggplot(aes(x = Year)) +
+  geom_point(aes(y = prop, color = VIC_RACE)) +
+  labs(title = "Proportion of Incidents Depending on the Victim's Race") +
+  theme(legend.text = element_text(size = 8), legend.position = "bottom")
+
+nypd_prop %>% ggplot(aes(x = Year)) +
+  geom_point(aes(y = prop, color = VIC_RACE)) +
+  facet_wrap(vars(VIC_RACE), scales = "free_y") +
+  theme(legend.position = "none")
+
+# Try to fit linear models to the data
+# Proportion of Black victims
+mb1 <- nypd_prop %>% ungroup() %>% filter(VIC_RACE == "BLACK") %>% 
+  select(Year, prop)
+mod1 <- lm(prop ~ Year, data = mb1)
+summary(mod1)
+mb2 <- mb1 %>% mutate(pred = predict(mod1))
+mb2
+ggplot(data = mb2, aes(x = Year)) +
+  geom_point(aes(y = prop, color = "data")) +
+  geom_point(aes(y = pred, color = "prediction")) +
+  labs(title = "Proportion of Black Victims through the Years")
+
+# Proportion of White Hispanic victims
+mwh1 <- nypd_prop %>% ungroup() %>% filter(VIC_RACE == "WHITE HISPANIC") %>% 
+  select(Year, prop)
+mod2 <- lm(prop ~ Year, data = mwh1)
+summary(mod2)
+mwh2 <- mwh1 %>% mutate(pred = predict(mod2))
+mwh2
+ggplot(data = mwh2, aes(x = Year)) +
+  geom_point(aes(y = prop, color = "data")) +
+  geom_point(aes(y = pred, color = "prediction")) +
+  labs(title = "Proportion of White Hispanic Victims through the Years")
+
+# Proportion of Asian victims
+ma1 <- nypd_prop %>% ungroup() %>% filter(VIC_RACE == "ASIAN / PACIFIC ISLANDER") %>% 
+  select(Year, prop)
+mod3 <- lm(prop ~ Year, data = ma1)
+summary(mod3)
+ma2 <- ma1 %>% mutate(pred = predict(mod3))
+ma2
+ggplot(data = ma2, aes(x = Year)) +
+  geom_point(aes(y = prop, color = "data")) +
+  geom_point(aes(y = pred, color = "prediction")) +
+  labs(title = "Proportion of Asian Victims through the Years")
+# Let's try exponential
+mod4 <- lm(log(prop) ~ Year, data = ma1)
+summary(mod4)
+ma3 <- ma1 %>% mutate(pred = exp(predict(mod4)))
+ma3
+ggplot(data = ma3, aes(x = Year)) +
+  geom_point(aes(y = prop, color = "data")) +
+  geom_point(aes(y = pred, color = "prediction")) +
+  labs(title = "Proportion of Asian Victims through the Years")
+```
+
+
+So obviously linearity is not appropriate to describe this data. The only reason I picked it is because I don't know how to model anything else just yet!  
+On the first plot, it looked linear because the proportion of Black victims is so much higher than the others that the data gets flattened. Only when we separate them can we see that maybe the data is not linear after all.  
+Note that the proportion of Asian victims does show a sharp increase in the last year, with the last point an outlier that could be explained by the increase post Covid that we discussed earlier.  I decided to try and look up how to do an exponential regression for this one and it does look better than the linear regression.
+
+
+## Conclusions
+
+The number of shooting incidents in New York City was clearly declining until 2019, when it shot back up sharply. The actual reasons for that could be multiple. Personnally I was surprised as I thought the number of shootings would decrease during the Covid lockdown.  
+Black people account for at least 70% of the victims, and the proportion varies up and down throughout the years.  
+The data does seem to show a sharp increase in the proportion of Asian victims post Covid, which could be an effect of the government of the time calling Covid19 the "China virus".  However, I am rushing to this explanation due to personal bias and would need to gather more data and do more analysis in order to eliminate other possible causes for the increase.
+
+
+ 
+ 
+ 
+```{r info}
+sessionInfo()
+```
